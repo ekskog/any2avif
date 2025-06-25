@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: avif-converter
+  namespace: webapps
+  labels:
+    app: avif-converter
+spec:
+  replicas: 2  # Higher replica count for conversion workload
+  selector:
+    matchLabels:
+      app: avif-converter
+  template:
+    metadata:
+      labels:
+        app: avif-converter
+    spec:
+      containers:
+      - name: avif-converter
+        image: ghcr.io/ekskog/any2avif:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: http
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 60
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 2
+        resources:
+          requests:
+            memory: "256Mi"  # Higher memory for image processing
+            cpu: "200m"
+          limits:
+            memory: "1Gi"    # Generous memory for large image conversions
+            cpu: "2000m"     # Higher CPU for AVIF encoding
+        env:
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: MAX_FILE_SIZE
+          value: "52428800"  # 50MB in bytes
+        - name: QUALITY
+          value: "80"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: avif-converter
+  namespace: webapps
+  labels:
+    app: avif-converter
+spec:
+  selector:
+    app: avif-converter
+  ports:
+  - port: 3002  # Match the port in photovault-api configmap
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  type: ClusterIP  # Internal service only

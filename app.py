@@ -93,15 +93,18 @@ def validate_heic_file(file: UploadFile) -> None:
             detail=f"File too large. Maximum size: {MAX_FILE_SIZE // 1024 // 1024}MB"
         )
 
-def convert_heic_to_avif_bytes(heic_data: bytes, original_filename: str) -> tuple[bytes, str]:
+def convert_heic_to_avif_bytes(heic_data: bytes, original_filename: str) -> dict:
     """
-    Convert HEIC bytes to AVIF bytes
-    Returns: (avif_bytes, output_filename)
+    Convert HEIC bytes to AVIF bytes with full and thumbnail variants
+    Returns: dict with 'full' and 'thumbnail' variants
     """
     try:
         with tempfile.NamedTemporaryFile(suffix='.heic', delete=False) as input_tmp:
             input_tmp.write(heic_data)
             input_tmp.flush()
+            
+            variants = {}
+            temp_files_to_cleanup = [input_tmp.name]
             
             try:
                 # Open and process the image
@@ -113,39 +116,66 @@ def convert_heic_to_avif_bytes(heic_data: bytes, original_filename: str) -> tupl
                         logger.info(f"Converting from {img.mode} to RGB")
                         img = img.convert('RGB')
                     
-                    # Save to AVIF in memory
-                    with tempfile.NamedTemporaryFile(suffix='.avif', delete=False) as output_tmp:
+                    input_name = Path(original_filename).stem
+                    
+                    # Create full-size variant
+                    with tempfile.NamedTemporaryFile(suffix='.avif', delete=False) as full_tmp:
+                        temp_files_to_cleanup.append(full_tmp.name)
                         img.save(
-                            output_tmp.name,
+                            full_tmp.name,
                             format='AVIF',
                             quality=QUALITY,
                             speed=6  # Encoding speed (0-10, 6 is good balance)
                         )
                         
-                        # Read the result
-                        with open(output_tmp.name, 'rb') as f:
-                            avif_data = f.read()
+                        with open(full_tmp.name, 'rb') as f:
+                            full_data = f.read()
                         
-                        # Generate output filename
-                        input_name = Path(original_filename).stem
-                        output_filename = f"{input_name}.avif"
+                        variants['full'] = {
+                            'data': full_data,
+                            'filename': f"{input_name}.avif",
+                            'size': len(full_data)
+                        }
+                    
+                    # Create thumbnail variant (max 300px on longest side)
+                    thumbnail_img = img.copy()
+                    thumbnail_img.thumbnail((300, 300), Image.Resampling.LANCZOS)
+                    
+                    with tempfile.NamedTemporaryFile(suffix='.avif', delete=False) as thumb_tmp:
+                        temp_files_to_cleanup.append(thumb_tmp.name)
+                        thumbnail_img.save(
+                            thumb_tmp.name,
+                            format='AVIF',
+                            quality=QUALITY,
+                            speed=6
+                        )
                         
-                        # Log compression stats
-                        input_size = len(heic_data)
-                        output_size = len(avif_data)
-                        compression_ratio = (1 - output_size / input_size) * 100
+                        with open(thumb_tmp.name, 'rb') as f:
+                            thumb_data = f.read()
                         
-                        logger.info(f"Conversion successful: {input_size/1024/1024:.2f}MB → {output_size/1024/1024:.2f}MB ({compression_ratio:.1f}% reduction)")
+                        variants['thumbnail'] = {
+                            'data': thumb_data,
+                            'filename': f"{input_name}_thumb.avif",
+                            'size': len(thumb_data)
+                        }
                         
-                        return avif_data, output_filename
+                    # Log compression stats
+                    input_size = len(heic_data)
+                    full_size = variants['full']['size']
+                    thumb_size = variants['thumbnail']['size']
+                    compression_ratio = (1 - full_size / input_size) * 100
+                    
+                    logger.info(f"Conversion successful: {input_size/1024/1024:.2f}MB → Full: {full_size/1024/1024:.2f}MB, Thumb: {thumb_size/1024:.2f}KB ({compression_ratio:.1f}% reduction)")
+                    
+                    return variants
                         
             finally:
                 # Cleanup temp files
-                try:
-                    os.unlink(input_tmp.name)
-                    os.unlink(output_tmp.name)
-                except:
-                    pass
+                for temp_file in temp_files_to_cleanup:
+                    try:
+                        os.unlink(temp_file)
+                    except:
+                        pass
                     
     except Exception as e:
         logger.error(f"Conversion failed: {str(e)}")
@@ -174,43 +204,92 @@ def validate_jpeg_file(file: UploadFile):
             detail=f"File too large. Max size: {MAX_FILE_SIZE // 1024 // 1024}MB"
         )
 
-def convert_jpeg_to_avif_bytes(jpeg_data: bytes, filename: str) -> tuple[bytes, str]:
+def convert_jpeg_to_avif_bytes(jpeg_data: bytes, filename: str) -> dict:
     """
-    Convert JPEG bytes to AVIF bytes
+    Convert JPEG bytes to AVIF bytes with full and thumbnail variants
     
     Args:
         jpeg_data: Input JPEG file data
         filename: Original filename
         
     Returns:
-        Tuple of (avif_data, output_filename)
+        Dict with 'full' and 'thumbnail' variants
     """
     with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_input:
         temp_input.write(jpeg_data)
         temp_input.flush()
         
-        with tempfile.NamedTemporaryFile(suffix='.avif', delete=False) as temp_output:
-            try:
-                # Convert using our JPEG conversion function
-                success = convert_jpeg_to_avif(temp_input.name, temp_output.name, QUALITY)
+        variants = {}
+        temp_files_to_cleanup = [temp_input.name]
+        
+        try:
+            # Open and process the image
+            with Image.open(temp_input.name) as img:
+                logger.info(f"Processing JPEG {img.size[0]}x{img.size[1]} image, mode: {img.mode}")
                 
-                if not success:
-                    raise Exception("Conversion failed")
+                # Convert to RGB if necessary
+                if img.mode not in ('RGB', 'RGBA'):
+                    logger.info(f"Converting from {img.mode} to RGB")
+                    img = img.convert('RGB')
                 
-                # Read output file
-                with open(temp_output.name, 'rb') as f:
-                    avif_data = f.read()
+                input_name = Path(filename).stem
                 
-                # Generate output filename
-                output_filename = Path(filename).with_suffix('.avif').name
+                # Create full-size variant
+                with tempfile.NamedTemporaryFile(suffix='.avif', delete=False) as full_tmp:
+                    temp_files_to_cleanup.append(full_tmp.name)
+                    img.save(
+                        full_tmp.name,
+                        format='AVIF',
+                        quality=QUALITY,
+                        speed=6
+                    )
+                    
+                    with open(full_tmp.name, 'rb') as f:
+                        full_data = f.read()
+                    
+                    variants['full'] = {
+                        'data': full_data,
+                        'filename': f"{input_name}.avif",
+                        'size': len(full_data)
+                    }
                 
-                return avif_data, output_filename
+                # Create thumbnail variant (max 300px on longest side)
+                thumbnail_img = img.copy()
+                thumbnail_img.thumbnail((300, 300), Image.Resampling.LANCZOS)
                 
-            finally:
-                # Clean up temp files
+                with tempfile.NamedTemporaryFile(suffix='.avif', delete=False) as thumb_tmp:
+                    temp_files_to_cleanup.append(thumb_tmp.name)
+                    thumbnail_img.save(
+                        thumb_tmp.name,
+                        format='AVIF',
+                        quality=QUALITY,
+                        speed=6
+                    )
+                    
+                    with open(thumb_tmp.name, 'rb') as f:
+                        thumb_data = f.read()
+                    
+                    variants['thumbnail'] = {
+                        'data': thumb_data,
+                        'filename': f"{input_name}_thumb.avif",
+                        'size': len(thumb_data)
+                    }
+                    
+                # Log compression stats
+                input_size = len(jpeg_data)
+                full_size = variants['full']['size']
+                thumb_size = variants['thumbnail']['size']
+                compression_ratio = (1 - full_size / input_size) * 100
+                
+                logger.info(f"JPEG conversion successful: {input_size/1024/1024:.2f}MB → Full: {full_size/1024/1024:.2f}MB, Thumb: {thumb_size/1024:.2f}KB ({compression_ratio:.1f}% reduction)")
+                
+                return variants
+                
+        finally:
+            # Clean up temp files
+            for temp_file in temp_files_to_cleanup:
                 try:
-                    os.unlink(temp_input.name)
-                    os.unlink(temp_output.name)
+                    os.unlink(temp_file)
                 except OSError:
                     pass
 
@@ -236,10 +315,10 @@ async def convert_image(
     file: UploadFile = File(..., description="HEIC image file to convert")
 ):
     """
-    Convert HEIC image to AVIF format
+    Convert HEIC image to AVIF format with full and thumbnail variants
     
     - **file**: HEIC image file (max 50MB)
-    - Returns AVIF image with preserved metadata
+    - Returns JSON with both full and thumbnail AVIF variants
     """
     logger.info(f"Conversion request: {file.filename} ({file.size} bytes)")
     
@@ -250,18 +329,28 @@ async def convert_image(
         # Read file content
         heic_data = await file.read()
         
-        # Convert to AVIF
-        avif_data, output_filename = convert_heic_to_avif_bytes(heic_data, file.filename or "image")
+        # Convert to AVIF variants
+        variants = convert_heic_to_avif_bytes(heic_data, file.filename or "image")
         
-        # Return as downloadable file
-        return Response(
-            content=avif_data,
-            media_type="image/avif",
-            headers={
-                "Content-Disposition": f"attachment; filename={output_filename}",
-                "Content-Length": str(len(avif_data))
-            }
-        )
+        # Return JSON response with both variants
+        response_data = {
+            "success": True,
+            "original_filename": file.filename,
+            "variants": []
+        }
+        
+        for variant_name, variant_data in variants.items():
+            import base64
+            response_data["variants"].append({
+                "variant": variant_name,
+                "filename": variant_data["filename"],
+                "content": base64.b64encode(variant_data["data"]).decode('utf-8'),
+                "size": variant_data["size"],
+                "mimetype": "image/avif"
+            })
+        
+        logger.info(f"Conversion response: {len(response_data['variants'])} variants for {file.filename}")
+        return response_data
         
     except HTTPException:
         raise
@@ -315,10 +404,10 @@ async def convert_jpeg_image(
     file: UploadFile = File(..., description="JPEG image file to convert")
 ):
     """
-    Convert JPEG image to AVIF format
+    Convert JPEG image to AVIF format with full and thumbnail variants
     
     - **file**: JPEG image file (max 50MB)
-    - Returns AVIF image with preserved metadata
+    - Returns JSON with both full and thumbnail AVIF variants
     """
     logger.info(f"JPEG conversion request: {file.filename} ({file.size} bytes)")
     
@@ -329,18 +418,28 @@ async def convert_jpeg_image(
         # Read file content
         jpeg_data = await file.read()
         
-        # Convert to AVIF
-        avif_data, output_filename = convert_jpeg_to_avif_bytes(jpeg_data, file.filename or "image")
+        # Convert to AVIF variants
+        variants = convert_jpeg_to_avif_bytes(jpeg_data, file.filename or "image")
         
-        # Return as downloadable file
-        return Response(
-            content=avif_data,
-            media_type="image/avif",
-            headers={
-                "Content-Disposition": f"attachment; filename={output_filename}",
-                "Content-Length": str(len(avif_data))
-            }
-        )
+        # Return JSON response with both variants
+        response_data = {
+            "success": True,
+            "original_filename": file.filename,
+            "variants": []
+        }
+        
+        for variant_name, variant_data in variants.items():
+            import base64
+            response_data["variants"].append({
+                "variant": variant_name,
+                "filename": variant_data["filename"],
+                "content": base64.b64encode(variant_data["data"]).decode('utf-8'),
+                "size": variant_data["size"],
+                "mimetype": "image/avif"
+            })
+        
+        logger.info(f"JPEG conversion response: {len(response_data['variants'])} variants for {file.filename}")
+        return response_data
         
     except HTTPException:
         raise
