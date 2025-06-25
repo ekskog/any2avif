@@ -41,7 +41,7 @@ jobs:
 
       - name: Login to GitHub Container Registry
         if: env.APP_CHANGED == 'true'
-        run: docker login ghcr.io -u $GITHUB_ACTOR --password-stdin <<< "${{ secrets.EK_GITHUB_PAT }}"
+        run: echo "${{ secrets.EK_GITHUB_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Build and Push Docker Image
         if: env.APP_CHANGED == 'true'
