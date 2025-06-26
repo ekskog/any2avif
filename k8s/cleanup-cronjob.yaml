@@ -1,0 +1,51 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: image-cleanup
+  namespace: kube-system
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          hostNetwork: true
+          hostPID: true
+          volumes:
+          - name: docker-sock
+            hostPath:
+              path: /var/run/docker.sock
+          - name: containerd-sock
+            hostPath:
+              path: /run/k3s/containerd/containerd.sock
+          containers:
+          - name: cleanup
+            image: docker:20.10
+            command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Starting cleanup at $(date)"
+              
+              # Cleanup unused images older than 24h
+              if command -v crictl >/dev/null 2>&1; then
+                crictl rmi --prune
+              fi
+              
+              # Docker cleanup if available
+              if command -v docker >/dev/null 2>&1; then
+                docker system prune -f --filter "until=24h"
+                docker image prune -a -f --filter "until=24h"
+              fi
+              
+              echo "Cleanup completed at $(date)"
+            volumeMounts:
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
+            - name: containerd-sock
+              mountPath: /run/containerd/containerd.sock
+            securityContext:
+              privileged: true
+          restartPolicy: OnFailure
+          nodeSelector:
+            node-role.kubernetes.io/master: "true"

@@ -6,7 +6,7 @@ metadata:
   labels:
     app: avif-converter
 spec:
-  replicas: 2  # Higher replica count for conversion workload
+  replicas: 1  # Higher replica count for conversion workload
   selector:
     matchLabels:
       app: avif-converter
@@ -27,7 +27,7 @@ spec:
             path: /health
             port: 8000
           initialDelaySeconds: 30
-          periodSeconds: 60
+          periodSeconds: 600  # 10 minutes
           timeoutSeconds: 10
           failureThreshold: 3
         readinessProbe:
@@ -40,10 +40,10 @@ spec:
           failureThreshold: 2
         resources:
           requests:
-            memory: "256Mi"  # Higher memory for image processing
+            memory: "512Mi"  # Higher baseline for image processing
             cpu: "200m"
           limits:
-            memory: "1Gi"    # Generous memory for large image conversions
+            memory: "3Gi"    # Much higher for large image conversions (24MP+ images)
             cpu: "2000m"     # Higher CPU for AVIF encoding
         env:
         - name: PYTHONUNBUFFERED

@@ -92,3 +92,12 @@ jobs:
           kubectl rollout status deployment/avif-converter --kubeconfig=kubeconfig.yaml --namespace=webapps --timeout=300s
           
           echo "✅ AVIF Converter deployment completed successfully"
+          
+      - name: Cleanup Old Images (Keep Last 5)
+        if: env.APP_CHANGED == 'true'
+        run: |
+          echo "🧹 Cleaning up old container images..."
+          # This would require additional GHCR API calls to delete old images
+          # For now, just log the current image
+          echo "Current image: ${{ env.IMAGE_NAME }}:${{ env.SHORT_SHA }}"
+          echo "TODO: Implement GHCR cleanup via API"
