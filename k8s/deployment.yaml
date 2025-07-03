@@ -20,12 +20,12 @@ spec:
         image: ghcr.io/ekskog/any2avif:latest
         imagePullPolicy: Always
         ports:
-        - containerPort: 8000
+        - containerPort: 3002
           name: http
         livenessProbe:
           httpGet:
             path: /health
-            port: 8000
+            port: 3002
           initialDelaySeconds: 30
           periodSeconds: 600  # 10 minutes
           timeoutSeconds: 10
@@ -33,7 +33,7 @@ spec:
         readinessProbe:
           httpGet:
             path: /health
-            port: 8000
+            port: 3002
           initialDelaySeconds: 10
           periodSeconds: 30
           timeoutSeconds: 5
@@ -64,8 +64,8 @@ spec:
   selector:
     app: avif-converter
   ports:
-  - port: 3002  # Match the port in photovault-api configmap
-    targetPort: 8000
+  - port: 3002  # Service port
+    targetPort: 3002  # Container port
     protocol: TCP
     name: http
   type: ClusterIP  # Internal service only
