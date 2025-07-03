@@ -98,84 +98,84 @@ def convert_heic_to_avif_bytes(heic_data: bytes, original_filename: str) -> dict
     Convert HEIC bytes to AVIF bytes with full and thumbnail variants
     Returns: dict with 'full' and 'thumbnail' variants
     """
+    input_tmp = None
+    full_tmp = None
+    thumb_tmp = None
+    
     try:
-        with tempfile.NamedTemporaryFile(suffix='.heic', delete=False) as input_tmp:
-            input_tmp.write(heic_data)
-            input_tmp.flush()
+        # Create input temp file
+        input_tmp = tempfile.NamedTemporaryFile(suffix='.heic', delete=False)
+        input_tmp.write(heic_data)
+        input_tmp.flush()
+        input_tmp.close()
+        
+        variants = {}
+        input_name = Path(original_filename).stem
+        
+        # Open and process the image
+        with Image.open(input_tmp.name) as img:
+            logger.info(f"Processing {img.size[0]}x{img.size[1]} image, mode: {img.mode}")
             
-            variants = {}
-            temp_files_to_cleanup = [input_tmp.name]
+            # Convert to RGB if necessary
+            if img.mode not in ('RGB', 'RGBA'):
+                logger.info(f"Converting from {img.mode} to RGB")
+                img = img.convert('RGB')
             
-            try:
-                # Open and process the image
-                with Image.open(input_tmp.name) as img:
-                    logger.info(f"Processing {img.size[0]}x{img.size[1]} image, mode: {img.mode}")
-                    
-                    # Convert to RGB if necessary
-                    if img.mode not in ('RGB', 'RGBA'):
-                        logger.info(f"Converting from {img.mode} to RGB")
-                        img = img.convert('RGB')
-                    
-                    input_name = Path(original_filename).stem
-                    
-                    # Create full-size variant
-                    with tempfile.NamedTemporaryFile(suffix='.avif', delete=False) as full_tmp:
-                        temp_files_to_cleanup.append(full_tmp.name)
-                        img.save(
-                            full_tmp.name,
-                            format='AVIF',
-                            quality=QUALITY,
-                            speed=6  # Encoding speed (0-10, 6 is good balance)
-                        )
-                        
-                        with open(full_tmp.name, 'rb') as f:
-                            full_data = f.read()
-                        
-                        variants['full'] = {
-                            'data': full_data,
-                            'filename': f"{input_name}.avif",
-                            'size': len(full_data)
-                        }
-                    
-                    # Create thumbnail variant (max 300px on longest side)
-                    thumbnail_img = img.copy()
-                    thumbnail_img.thumbnail((300, 300), Image.Resampling.LANCZOS)
-                    
-                    with tempfile.NamedTemporaryFile(suffix='.avif', delete=False) as thumb_tmp:
-                        temp_files_to_cleanup.append(thumb_tmp.name)
-                        thumbnail_img.save(
-                            thumb_tmp.name,
-                            format='AVIF',
-                            quality=QUALITY,
-                            speed=6
-                        )
-                        
-                        with open(thumb_tmp.name, 'rb') as f:
-                            thumb_data = f.read()
-                        
-                        variants['thumbnail'] = {
-                            'data': thumb_data,
-                            'filename': f"{input_name}_thumb.avif",
-                            'size': len(thumb_data)
-                        }
-                        
-                    # Log compression stats
-                    input_size = len(heic_data)
-                    full_size = variants['full']['size']
-                    thumb_size = variants['thumbnail']['size']
-                    compression_ratio = (1 - full_size / input_size) * 100
-                    
-                    logger.info(f"Conversion successful: {input_size/1024/1024:.2f}MB → Full: {full_size/1024/1024:.2f}MB, Thumb: {thumb_size/1024:.2f}KB ({compression_ratio:.1f}% reduction)")
-                    
-                    return variants
-                        
-            finally:
-                # Cleanup temp files
-                for temp_file in temp_files_to_cleanup:
-                    try:
-                        os.unlink(temp_file)
-                    except:
-                        pass
+            # Create full-size variant
+            full_tmp = tempfile.NamedTemporaryFile(suffix='.avif', delete=False)
+            full_tmp.close()
+            
+            img.save(
+                full_tmp.name,
+                format='AVIF',
+                quality=QUALITY,
+                speed=6  # Encoding speed (0-10, 6 is good balance)
+            )
+            
+            with open(full_tmp.name, 'rb') as f:
+                full_data = f.read()
+            
+            variants['full'] = {
+                'data': full_data,
+                'filename': f"{input_name}.avif",
+                'size': len(full_data)
+            }
+            
+            # Create thumbnail variant (max 300px on longest side) - reuse img, don't copy
+            original_size = img.size
+            img.thumbnail((300, 300), Image.Resampling.LANCZOS)
+            
+            thumb_tmp = tempfile.NamedTemporaryFile(suffix='.avif', delete=False)
+            thumb_tmp.close()
+            
+            img.save(
+                thumb_tmp.name,
+                format='AVIF',
+                quality=QUALITY,
+                speed=6
+            )
+            
+            with open(thumb_tmp.name, 'rb') as f:
+                thumb_data = f.read()
+            
+            variants['thumbnail'] = {
+                'data': thumb_data,
+                'filename': f"{input_name}_thumb.avif",
+                'size': len(thumb_data)
+            }
+            
+            # Log compression stats
+            input_size = len(heic_data)
+            full_size = variants['full']['size']
+            thumb_size = variants['thumbnail']['size']
+            compression_ratio = (1 - full_size / input_size) * 100
+            
+            logger.info(f"Conversion successful: {input_size/1024/1024:.2f}MB → Full: {full_size/1024/1024:.2f}MB, Thumb: {thumb_size/1024:.2f}KB ({compression_ratio:.1f}% reduction)")
+            
+            # Clear data from memory explicitly
+            del full_data, thumb_data
+            
+            return variants
                     
     except Exception as e:
         logger.error(f"Conversion failed: {str(e)}")
@@ -183,6 +183,16 @@ def convert_heic_to_avif_bytes(heic_data: bytes, original_filename: str) -> dict
             status_code=500,
             detail=f"Conversion failed: {str(e)}"
         )
+    finally:
+        # Cleanup temp files
+        for temp_file in [input_tmp.name if input_tmp else None, 
+                         full_tmp.name if full_tmp else None, 
+                         thumb_tmp.name if thumb_tmp else None]:
+            if temp_file:
+                try:
+                    os.unlink(temp_file)
+                except:
+                    pass
 
 def validate_jpeg_file(file: UploadFile):
     """Validate uploaded JPEG file"""
@@ -215,82 +225,99 @@ def convert_jpeg_to_avif_bytes(jpeg_data: bytes, filename: str) -> dict:
     Returns:
         Dict with 'full' and 'thumbnail' variants
     """
-    with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_input:
+    temp_input = None
+    full_tmp = None
+    thumb_tmp = None
+    
+    try:
+        # Create input temp file
+        temp_input = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False)
         temp_input.write(jpeg_data)
         temp_input.flush()
+        temp_input.close()
         
         variants = {}
-        temp_files_to_cleanup = [temp_input.name]
+        input_name = Path(filename).stem
         
-        try:
-            # Open and process the image
-            with Image.open(temp_input.name) as img:
-                logger.info(f"Processing JPEG {img.size[0]}x{img.size[1]} image, mode: {img.mode}")
-                
-                # Convert to RGB if necessary
-                if img.mode not in ('RGB', 'RGBA'):
-                    logger.info(f"Converting from {img.mode} to RGB")
-                    img = img.convert('RGB')
-                
-                input_name = Path(filename).stem
-                
-                # Create full-size variant
-                with tempfile.NamedTemporaryFile(suffix='.avif', delete=False) as full_tmp:
-                    temp_files_to_cleanup.append(full_tmp.name)
-                    img.save(
-                        full_tmp.name,
-                        format='AVIF',
-                        quality=QUALITY,
-                        speed=6
-                    )
-                    
-                    with open(full_tmp.name, 'rb') as f:
-                        full_data = f.read()
-                    
-                    variants['full'] = {
-                        'data': full_data,
-                        'filename': f"{input_name}.avif",
-                        'size': len(full_data)
-                    }
-                
-                # Create thumbnail variant (max 300px on longest side)
-                thumbnail_img = img.copy()
-                thumbnail_img.thumbnail((300, 300), Image.Resampling.LANCZOS)
-                
-                with tempfile.NamedTemporaryFile(suffix='.avif', delete=False) as thumb_tmp:
-                    temp_files_to_cleanup.append(thumb_tmp.name)
-                    thumbnail_img.save(
-                        thumb_tmp.name,
-                        format='AVIF',
-                        quality=QUALITY,
-                        speed=6
-                    )
-                    
-                    with open(thumb_tmp.name, 'rb') as f:
-                        thumb_data = f.read()
-                    
-                    variants['thumbnail'] = {
-                        'data': thumb_data,
-                        'filename': f"{input_name}_thumb.avif",
-                        'size': len(thumb_data)
-                    }
-                    
-                # Log compression stats
-                input_size = len(jpeg_data)
-                full_size = variants['full']['size']
-                thumb_size = variants['thumbnail']['size']
-                compression_ratio = (1 - full_size / input_size) * 100
-                
-                logger.info(f"JPEG conversion successful: {input_size/1024/1024:.2f}MB → Full: {full_size/1024/1024:.2f}MB, Thumb: {thumb_size/1024:.2f}KB ({compression_ratio:.1f}% reduction)")
-                
-                return variants
-                
-        finally:
-            # Clean up temp files
-            for temp_file in temp_files_to_cleanup:
+        # Open and process the image
+        with Image.open(temp_input.name) as img:
+            logger.info(f"Processing JPEG {img.size[0]}x{img.size[1]} image, mode: {img.mode}")
+            
+            # Convert to RGB if necessary
+            if img.mode not in ('RGB', 'RGBA'):
+                logger.info(f"Converting from {img.mode} to RGB")
+                img = img.convert('RGB')
+            
+            # Create full-size variant
+            full_tmp = tempfile.NamedTemporaryFile(suffix='.avif', delete=False)
+            full_tmp.close()
+            
+            img.save(
+                full_tmp.name,
+                format='AVIF',
+                quality=QUALITY,
+                speed=6
+            )
+            
+            with open(full_tmp.name, 'rb') as f:
+                full_data = f.read()
+            
+            variants['full'] = {
+                'data': full_data,
+                'filename': f"{input_name}.avif",
+                'size': len(full_data)
+            }
+            
+            # Create thumbnail variant - reuse img, don't copy
+            img.thumbnail((300, 300), Image.Resampling.LANCZOS)
+            
+            thumb_tmp = tempfile.NamedTemporaryFile(suffix='.avif', delete=False)
+            thumb_tmp.close()
+            
+            img.save(
+                thumb_tmp.name,
+                format='AVIF',
+                quality=QUALITY,
+                speed=6
+            )
+            
+            with open(thumb_tmp.name, 'rb') as f:
+                thumb_data = f.read()
+            
+            variants['thumbnail'] = {
+                'data': thumb_data,
+                'filename': f"{input_name}_thumb.avif",
+                'size': len(thumb_data)
+            }
+            
+            # Log compression stats
+            input_size = len(jpeg_data)
+            full_size = variants['full']['size']
+            thumb_size = variants['thumbnail']['size']
+            compression_ratio = (1 - full_size / input_size) * 100
+            
+            logger.info(f"JPEG Conversion successful: {input_size/1024/1024:.2f}MB → Full: {full_size/1024/1024:.2f}MB, Thumb: {thumb_size/1024:.2f}KB ({compression_ratio:.1f}% reduction)")
+            
+            # Clear data from memory explicitly
+            del full_data, thumb_data
+            
+            return variants
+            
+    except Exception as e:
+        logger.error(f"JPEG conversion failed: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"JPEG conversion failed: {str(e)}"
+        )
+    finally:
+        # Cleanup temp files
+        for temp_file in [temp_input.name if temp_input else None,
+                         full_tmp.name if full_tmp else None,
+                         thumb_tmp.name if thumb_tmp else None]:
+            if temp_file:
                 try:
                     os.unlink(temp_file)
-                except OSError:
+                except:
                     pass
 
 @app.get("/")
